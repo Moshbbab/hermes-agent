@@ -134,7 +134,7 @@ def assess_hbu_risk(land_type: LandType,
 
     # Each 100 bps repo shock erodes developer margin by ~25 bps (0.25%)
     margin_erosion_bps = repo_shock_bps * 0.25
-    margin_erosion_pct = margin_erosion_bps / 100.0
+    margin_erosion_pct = margin_erosion_bps / 10000.0
     remaining_margin = base_margin_pct - margin_erosion_pct
 
     if remaining_margin <= 0.02:       # <= 2% → HBU at risk
