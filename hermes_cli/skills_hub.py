@@ -1025,6 +1025,9 @@ def _github_publish(skill_path: Path, skill_name: str, target_repo: str,
 def do_snapshot_export(output_path: str, console: Optional[Console] = None) -> None:
     """Export current hub skill configuration to a portable JSON file."""
     from tools.skills_hub import HubLockFile, TapsManager
+    from hermes_cli.config import load_config
+    from hermes_cli.skills_config import get_disabled_skills
+    from hermes_cli.platforms import PLATFORMS as _PLATFORMS
 
     c = console or _console
     lock = HubLockFile()
@@ -1032,6 +1035,15 @@ def do_snapshot_export(output_path: str, console: Optional[Console] = None) -> N
 
     installed = lock.list_installed()
     tap_list = taps.list_taps()
+
+    config = load_config()
+    global_disabled = sorted(get_disabled_skills(config))
+    platform_keys = [k for k in _PLATFORMS if k != "api_server"]
+    platform_disabled = {
+        k: sorted(get_disabled_skills(config, k))
+        for k in platform_keys
+        if config.get("skills", {}).get("platform_disabled", {}).get(k) is not None
+    }
 
     snapshot = {
         "hermes_version": "0.1.0",
@@ -1049,6 +1061,8 @@ def do_snapshot_export(output_path: str, console: Optional[Console] = None) -> N
             for entry in installed
         ],
         "taps": tap_list,
+        "disabled_skills": global_disabled,
+        "platform_disabled_skills": platform_disabled,
     }
 
     payload = json.dumps(snapshot, indent=2, ensure_ascii=False) + "\n"
@@ -1059,13 +1073,16 @@ def do_snapshot_export(output_path: str, console: Optional[Console] = None) -> N
         out = Path(output_path)
         out.write_text(payload)
         c.print(f"[bold green]Snapshot exported:[/] {out}")
-        c.print(f"[dim]{len(installed)} skill(s), {len(tap_list)} tap(s)[/]\n")
+        c.print(f"[dim]{len(installed)} skill(s), {len(tap_list)} tap(s), "
+                f"{len(global_disabled)} globally disabled[/]\n")
 
 
 def do_snapshot_import(input_path: str, force: bool = False,
                        console: Optional[Console] = None) -> None:
     """Re-install skills from a snapshot file."""
     from tools.skills_hub import TapsManager
+    from hermes_cli.config import load_config
+    from hermes_cli.skills_config import save_disabled_skills
 
     c = console or _console
     inp = Path(input_path)
@@ -1091,20 +1108,33 @@ def do_snapshot_import(input_path: str, force: bool = False,
 
     # Install skills
     skills = snapshot.get("skills", [])
-    if not skills:
-        c.print("[dim]No skills in snapshot to install.[/]\n")
-        return
+    if skills:
+        c.print(f"[bold]Importing {len(skills)} skill(s) from snapshot...[/]\n")
+        for entry in skills:
+            identifier = entry.get("identifier", "")
+            category = entry.get("category", "")
+            if not identifier:
+                c.print(f"[yellow]Skipping entry with no identifier: {entry.get('name', '?')}[/]")
+                continue
 
-    c.print(f"[bold]Importing {len(skills)} skill(s) from snapshot...[/]\n")
-    for entry in skills:
-        identifier = entry.get("identifier", "")
-        category = entry.get("category", "")
-        if not identifier:
-            c.print(f"[yellow]Skipping entry with no identifier: {entry.get('name', '?')}[/]")
-            continue
+            c.print(f"[bold]--- {entry.get('name', identifier)} ---[/]")
+            do_install(identifier, category=category, force=force, console=c)
+    else:
+        c.print("[dim]No hub skills in snapshot to install.[/]")
 
-        c.print(f"[bold]--- {entry.get('name', identifier)} ---[/]")
-        do_install(identifier, category=category, force=force, console=c)
+    # Restore disabled-skills configuration
+    global_disabled = snapshot.get("disabled_skills")
+    platform_disabled = snapshot.get("platform_disabled_skills", {})
+    if global_disabled is not None or platform_disabled:
+        config = load_config()
+        if global_disabled is not None:
+            save_disabled_skills(config, set(global_disabled))
+            c.print(f"[dim]Restored {len(global_disabled)} globally disabled skill(s)[/]")
+        for platform, disabled_list in platform_disabled.items():
+            save_disabled_skills(config, set(disabled_list), platform=platform)
+        if platform_disabled:
+            c.print(f"[dim]Restored per-platform disabled config for: "
+                    f"{', '.join(platform_disabled.keys())}[/]")
 
     c.print("[bold green]Snapshot import complete.[/]\n")
 
