@@ -1248,40 +1248,46 @@ def profile_env(tmp_path, monkeypatch):
 
 ## Testing
 
-**ALWAYS use `scripts/run_tests.sh`** — do not call `pytest` directly. The script enforces
-hermetic environment parity with CI (unset credential vars, TZ=UTC, LANG=C.UTF-8,
-`-n auto` xdist workers, in-tree subprocess-isolation plugin). Direct `pytest`
-on a 16+ core developer machine with API keys set diverges from CI in ways
-that have caused multiple "works locally, fails in CI" incidents (and the reverse).
+**ALWAYS use `scripts/run_tests.sh`** — do not call `pytest` directly. The script runs
+in a hermetic `env -i` environment (credential vars cannot leak, TZ=UTC,
+LANG=C.UTF-8, PYTHONHASHSEED=0) and delegates to
+`scripts/run_tests_parallel.py` for per-file process isolation. Direct `pytest`
+on a developer machine with API keys set diverges from CI in ways that have
+caused multiple "works locally, fails in CI" incidents (and the reverse).
 
 ```bash
-scripts/run_tests.sh                                  # full suite, CI-parity
-scripts/run_tests.sh tests/gateway/                   # one directory
-scripts/run_tests.sh tests/agent/test_foo.py::test_x  # one test
-scripts/run_tests.sh -v --tb=long                     # pass-through pytest flags
-scripts/run_tests.sh --no-isolate tests/foo/          # disable subprocess isolation (faster, for debugging)
+scripts/run_tests.sh                            # full suite, CI-parity
+scripts/run_tests.sh -j 4                       # cap parallelism
+scripts/run_tests.sh tests/gateway/             # one directory
+scripts/run_tests.sh tests/agent/ tests/acp/    # multiple roots
+scripts/run_tests.sh tests/agent/test_foo.py    # one file
+scripts/run_tests.sh tests/agent/test_foo.py -- -k test_x   # one test (-k filter)
+scripts/run_tests.sh -- -v --tb=long            # pytest args go after '--'
 ```
 
-### Subprocess-per-test isolation
+Everything after a literal `--` is passed through to each per-file pytest
+invocation. Positional arguments before `--` are discovery roots
+(directories or `.py` files) — node-ID selectors (`file.py::test_x`) are
+NOT accepted as positionals; use `-- -k <pattern>` instead.
 
-Every test runs in a freshly-spawned Python subprocess via the in-tree plugin
-at `tests/_isolate_plugin.py`. This means module-level dicts/sets and
-ContextVars from one test cannot leak into the next — the historic
-`_reset_module_state` autouse fixture is gone.
+### Per-file subprocess isolation
 
-Implementation notes:
+`scripts/run_tests_parallel.py` discovers test files under `tests/`
+(excluding `integration/` and `e2e/`, which run in dedicated CI jobs) and
+runs one `python -m pytest <file>` subprocess per file with bounded
+parallelism (default: `os.cpu_count()`; override with `-j` or
+`HERMES_TEST_WORKERS`).
 
-- The plugin uses `multiprocessing.get_context("spawn")`, which works on
-  Linux, macOS, and Windows alike (POSIX `fork` is not used).
-- Per-test overhead is ~0.5–1.0s (Python startup + pytest collection). xdist
-  parallelism amortizes this across cores; on a 20-core box the full suite
-  finishes in roughly the same wall time as before, but flake-free.
-- `isolate_timeout` (configured in `pyproject.toml`) caps each test at 30s.
-  Hangs are killed and surfaced as a failure report.
-- Pass `--no-isolate` to disable isolation — useful when debugging a single
-  test interactively, or when you specifically want to verify state leakage.
-- The plugin disables itself in child processes (sentinel envvar
-  `HERMES_ISOLATE_CHILD=1`), so there's no fork-bomb risk.
+- **Per-file, not per-test:** per-test spawn overhead (~250ms × 17k tests)
+  swamped the actual work; per-file (~250ms × ~850 files) fits the budget
+  while still giving every file a fresh interpreter. Cross-file
+  module-level state leakage was the original flake source; intra-file
+  state is the test author's responsibility.
+- **No xdist:** xdist's persistent workers accumulate state across files —
+  exactly the leakage this design removes. The runner is a plain
+  subprocess pool gated by a semaphore.
+- **Per-test 30s timeout** comes from `--timeout=30 --timeout-method=thread`
+  in `pyproject.toml` `addopts` (pytest-timeout), not from the runner.
 
 ### Why the wrapper (and why the old "just call pytest" doesn't work)
 
@@ -1289,32 +1295,25 @@ Five real sources of local-vs-CI drift the script closes:
 
 | | Without wrapper | With wrapper |
 |---|---|---|
-| Provider API keys | Whatever is in your env (auto-detects pool) | All `*_API_KEY`/`*_TOKEN`/etc. unset |
+| Provider API keys | Whatever is in your env (auto-detects pool) | `env -i` — nothing leaks in |
 | HOME / `~/.hermes/` | Your real config+auth.json | Temp dir per test |
 | Timezone | Local TZ (PDT etc.) | UTC |
 | Locale | Whatever is set | C.UTF-8 |
-| xdist workers | `-n auto` = all cores | `-n auto` (safe — subprocess isolation prevents cross-worker flakes) |
+| Worker state | Shared interpreter across files | Fresh interpreter per file |
 
-`tests/conftest.py` also enforces points 1-4 as an autouse fixture so ANY pytest
-invocation (including IDE integrations) gets hermetic behavior — but the wrapper
-is belt-and-suspenders.
+`tests/conftest.py` also blanks credentials and redirects `HERMES_HOME` to a
+temp dir as autouse fixtures, so ANY pytest invocation (including IDE
+integrations) gets hermetic behavior — but the wrapper is belt-and-suspenders.
 
 ### Running without the wrapper (only if you must)
 
 If you can't use the wrapper (e.g. inside an IDE that shells pytest directly),
-at minimum activate the venv. The isolation plugin loads automatically from
-`addopts` in `pyproject.toml`, so you get the same per-test process isolation
-either way.
+at minimum activate the venv. Note that a single shared-interpreter run does
+NOT get per-file isolation — module-level state can leak between files.
 
 ```bash
 source .venv/bin/activate   # or: source venv/bin/activate
 python -m pytest tests/ -q
-```
-
-If you need to bypass isolation for fast feedback while debugging:
-
-```bash
-python -m pytest tests/agent/test_foo.py -q --no-isolate
 ```
 
 Always run the full suite before pushing changes.

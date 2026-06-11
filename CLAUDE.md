@@ -24,14 +24,15 @@ hermes doctor               # diagnose config/env issues
 ### Testing — always use the wrapper, never bare `pytest`
 
 ```bash
-scripts/run_tests.sh                                  # full suite, CI-parity
-scripts/run_tests.sh tests/gateway/                   # one directory
-scripts/run_tests.sh tests/agent/test_foo.py::test_x  # one test
-scripts/run_tests.sh -v --tb=long                     # pass-through pytest flags
-scripts/run_tests.sh --no-isolate tests/foo/          # skip subprocess isolation (debugging)
+scripts/run_tests.sh                                   # full suite, CI-parity
+scripts/run_tests.sh tests/gateway/                    # one directory
+scripts/run_tests.sh tests/agent/test_foo.py           # one file
+scripts/run_tests.sh tests/agent/test_foo.py -- -k test_x   # one test (-k filter)
+scripts/run_tests.sh -j 4                              # cap parallelism
+scripts/run_tests.sh -- -v --tb=long                   # pytest args go after '--'
 ```
 
-The wrapper enforces CI parity: credential env vars blanked, `TZ=UTC`, `LANG=C.UTF-8`, temp `HERMES_HOME`. Every test runs in a fresh spawned subprocess (`tests/_isolate_plugin.py`, 30s timeout per test) so module-level state can't leak between tests. Run the full suite before pushing.
+The wrapper runs in a hermetic `env -i` environment (credentials can't leak, `TZ=UTC`, `LANG=C.UTF-8`, `PYTHONHASHSEED=0`) and delegates to `scripts/run_tests_parallel.py`: **per-file** isolation — each test file gets its own freshly-spawned `python -m pytest <file>` subprocess (no xdist, no shared workers). Node-ID selectors (`file.py::test_x`) are not accepted as positionals — use `-- -k`. Per-test 30s timeout comes from `--timeout=30` in pyproject `addopts`. `tests/conftest.py` redirects `HERMES_HOME` to a temp dir for any pytest invocation. Run the full suite before pushing.
 
 ### TUI development
 
