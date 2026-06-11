@@ -360,7 +360,7 @@ The registry of record is `hermes_cli/commands.py` — every consumer
 
 ```
 ~/.hermes/config.yaml       Main configuration
-~/.hermes/.env              API keys and secrets
+~/.hermes/.env              API keys and secrets (under $HERMES_HOME if set)
 $HERMES_HOME/skills/        Installed skills
 ~/.hermes/sessions/         Gateway routing index, request dumps, *.jsonl transcripts (and optional per-session JSON snapshots when sessions.write_json_snapshots: true)
 ~/.hermes/state.db          Canonical session store (SQLite + FTS5)
@@ -789,17 +789,20 @@ diagnostic recipe in `references/execute-code-sandbox-env-windows.md`.
 **`scripts/run_tests.sh` doesn't work as-is on Windows** — it looks for
 POSIX venv layouts (`.venv/bin/activate`). The Hermes-installed venv at
 `venv/Scripts/` has no pip or pytest either (stripped for install size).
-Workaround: install `pytest + pytest-xdist + pyyaml` into a system Python
-3.11 user site, then invoke pytest directly with `PYTHONPATH` set:
+Workaround: install `pytest + pytest-asyncio + pytest-timeout + pyyaml` into
+a system Python 3.11 user site, then invoke pytest directly with
+`PYTHONPATH` set:
 
 ```bash
-"/c/Program Files/Python311/python" -m pip install --user pytest pytest-xdist pyyaml
+"/c/Program Files/Python311/python" -m pip install --user pytest pytest-asyncio pytest-timeout pyyaml
 export PYTHONPATH="$(pwd)"
-"/c/Program Files/Python311/python" -m pytest tests/foo/test_bar.py -v --tb=short -n 0
+"/c/Program Files/Python311/python" -m pytest tests/foo/test_bar.py -v --tb=short
 ```
 
-Use `-n 0`, not `-n 4` — `pyproject.toml`'s default `addopts` already
-includes `-n`, and the wrapper's CI-parity guarantees don't apply off POSIX.
+The repo no longer uses pytest-xdist — `pyproject.toml`'s `addopts` is just
+the integration-marker filter plus pytest-timeout, and per-file parallelism
+lives in `scripts/run_tests_parallel.py` (POSIX wrapper only). The wrapper's
+CI-parity guarantees don't apply off POSIX.
 
 **POSIX-only tests need skip guards.** Common markers already in the codebase:
 - Symlinks — elevated privileges on Windows
@@ -927,7 +930,7 @@ hermes-agent/
 ```
 <!-- ascii-guard-ignore-end -->
 
-Config: `~/.hermes/config.yaml` (settings), `~/.hermes/.env` (API keys).
+Config: `~/.hermes/config.yaml` (settings), `~/.hermes/.env` (API keys) — both under `$HERMES_HOME` when it is set.
 
 ### Adding a Tool (3 files)
 
@@ -990,14 +993,14 @@ python -m pytest tests/tools/ -q            # Specific area
 - Run full suite before pushing any change
 - Use `-o 'addopts='` to clear any baked-in pytest flags
 
-**Windows contributors:** `scripts/run_tests.sh` currently looks for POSIX venvs (`.venv/bin/activate` / `venv/bin/activate`) and will error out on Windows where the layout is `venv/Scripts/activate` + `python.exe`. The Hermes-installed venv at `venv/Scripts/` also has no `pip` or `pytest` — it's stripped for end-user install size. Workaround: install pytest + pytest-xdist + pyyaml into a system Python 3.11 user site (`/c/Program Files/Python311/python -m pip install --user pytest pytest-xdist pyyaml`), then run tests directly:
+**Windows contributors:** `scripts/run_tests.sh` currently looks for POSIX venvs (`.venv/bin/activate` / `venv/bin/activate`) and will error out on Windows where the layout is `venv/Scripts/activate` + `python.exe`. The Hermes-installed venv at `venv/Scripts/` also has no `pip` or `pytest` — it's stripped for end-user install size. Workaround: install pytest + pytest-asyncio + pytest-timeout + pyyaml into a system Python 3.11 user site (`/c/Program Files/Python311/python -m pip install --user pytest pytest-asyncio pytest-timeout pyyaml`), then run tests directly:
 
 ```bash
 export PYTHONPATH="$(pwd)"
-"/c/Program Files/Python311/python" -m pytest tests/tools/test_foo.py -v --tb=short -n 0
+"/c/Program Files/Python311/python" -m pytest tests/tools/test_foo.py -v --tb=short
 ```
 
-Use `-n 0` (not `-n 4`) because `pyproject.toml`'s default `addopts` already includes `-n`, and the wrapper's CI-parity story doesn't apply off-POSIX.
+The repo no longer uses pytest-xdist (per-file parallelism lives in `scripts/run_tests_parallel.py`, POSIX wrapper only), and the wrapper's CI-parity story doesn't apply off-POSIX.
 
 **Cross-platform test guards:** tests that use POSIX-only syscalls need a skip marker. Common ones already in the codebase:
 - Symlink creation → `@pytest.mark.skipif(sys.platform == "win32", reason="Symlinks require elevated privileges on Windows")` (see `tests/cron/test_cron_script.py`)

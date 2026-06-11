@@ -98,20 +98,21 @@ The hermes test runner and pytest both support this:
 
 ```bash
 # Drop to pdb on failure (or on any raised exception):
-scripts/run_tests.sh tests/path/to/test_file.py::test_name --pdb
+python -m pytest tests/path/to/test_file.py::test_name --pdb
 
 # Drop to pdb at the START of the test:
-scripts/run_tests.sh tests/path/to/test_file.py::test_name --trace
+python -m pytest tests/path/to/test_file.py::test_name --trace
 
 # Show locals in tracebacks without pdb:
-scripts/run_tests.sh tests/path/to/test_file.py --showlocals --tb=long
+python -m pytest tests/path/to/test_file.py --showlocals --tb=long
 ```
 
-Note: `scripts/run_tests.sh` uses xdist (`-n 4`) by default, and pdb does NOT work under xdist. Add `-p no:xdist` or run a single test with `-n 0`:
+Note: do NOT use `scripts/run_tests.sh` for pdb — it runs each test file in
+a non-interactive subprocess (via `scripts/run_tests_parallel.py`), so the
+pdb prompt never reaches your terminal. It also rejects `::` node-ID
+selectors as positionals. Debug directly with pytest in an activated venv:
 
 ```bash
-scripts/run_tests.sh tests/foo_test.py::test_bar --pdb -p no:xdist
-# or
 source .venv/bin/activate
 python -m pytest tests/foo_test.py::test_bar --pdb
 ```
@@ -276,7 +277,7 @@ nc 127.0.0.1 4444
 ## Debugging Hermes-specific Processes
 
 ### Tests
-See Recipe 3. Always add `-p no:xdist` or run single tests without xdist.
+See Recipe 3. Always run pytest directly in an activated venv — never under `scripts/run_tests.sh`, whose per-file subprocesses swallow the pdb prompt.
 
 ### `run_agent.py` / CLI — one-shot
 Easiest: add `breakpoint()` near the suspect line, then run `hermes` normally. Control returns to your terminal at the pause point.
@@ -308,7 +309,7 @@ Long-lived. Use `remote-pdb` at a handler, or `debugpy` with `--wait-for-client`
 
 ## Common Pitfalls
 
-1. **pdb under pytest-xdist silently does nothing.** You won't see the prompt, the test just hangs. Always use `-p no:xdist` or `-n 0`.
+1. **pdb under the parallel test wrapper silently does nothing.** `scripts/run_tests.sh` runs each file in a non-interactive subprocess — you won't see the prompt, the test just hangs until the 30s timeout kills it. Always debug with `python -m pytest` directly in an activated venv.
 
 2. **`breakpoint()` in CI / non-TTY contexts hangs the process.** Safe locally; never commit it. Add a pre-commit grep as a safety net.
 
@@ -333,7 +334,7 @@ Long-lived. Use `remote-pdb` at a handler, or `debugpy` with `--wait-for-client`
 
 - [ ] After `pip install debugpy`, confirm: `python -c "import debugpy; print(debugpy.__version__)"`
 - [ ] For remote debug, confirm the port is actually listening: `ss -tlnp | grep 5678`
-- [ ] First breakpoint actually hits (if it doesn't, you likely have `PYTHONBREAKPOINT=0`, you're under xdist, or execution finished before attach)
+- [ ] First breakpoint actually hits (if it doesn't, you likely have `PYTHONBREAKPOINT=0`, you're under the parallel test wrapper, or execution finished before attach)
 - [ ] `where` / `w` shows the expected call stack
 - [ ] Post-debug cleanup: no stray `breakpoint()` / `set_trace()` in committed code
   ```bash
@@ -354,11 +355,14 @@ breakpoint()
 
 **"This test passes in isolation but fails in the suite."**
 ```bash
-scripts/run_tests.sh tests/the_test.py --pdb -p no:xdist
-# But if it only fails WITH other tests:
 source .venv/bin/activate
-python -m pytest tests/ -x --pdb -p no:xdist
+python -m pytest tests/the_test.py --pdb
+# But if it only fails WITH other tests (same-file state accumulation):
+python -m pytest tests/ -x --pdb
 # Now it pdb-traps at the exact failing test after state accumulated.
+# Note: the wrapper isolates per FILE, so cross-file leakage can't
+# reproduce under scripts/run_tests.sh — a shared-interpreter run like
+# the above is exactly how you surface it.
 ```
 
 **"My async handler deadlocks."**

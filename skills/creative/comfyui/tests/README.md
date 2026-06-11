@@ -7,19 +7,18 @@ without any setup; cloud integration tests need a Comfy Cloud API key.
 
 ```bash
 # Unit tests only (no network required) — runs in <1s
-python3 -m pytest tests/ -c tests/pytest.ini -o addopts="-p no:xdist"
+python3 -m pytest tests/ -c tests/pytest.ini
 
 # Including cloud integration tests
-COMFY_CLOUD_API_KEY="comfyui-..." python3 -m pytest tests/ \
-  -c tests/pytest.ini -o addopts="-p no:xdist"
+COMFY_CLOUD_API_KEY="comfyui-..." python3 -m pytest tests/ -c tests/pytest.ini
 
 # Just cloud tests
 COMFY_CLOUD_API_KEY="comfyui-..." python3 -m pytest tests/test_cloud_integration.py \
-  -c tests/pytest.ini -o addopts="-p no:xdist" -v
+  -c tests/pytest.ini -v
 ```
 
-The `-c` and `-o` overrides isolate this suite from any parent
-`pyproject.toml` pytest config (e.g. the `-n auto` from a parent repo).
+The `-c` override isolates this suite from any parent `pyproject.toml`
+pytest config (marker filters, plugin-specific `addopts` flags).
 
 ## Test files
 
@@ -41,10 +40,10 @@ When you change a script:
 3. Workflow fixtures live in `conftest.py` (`sd15_workflow`, `flux_workflow`,
    `video_workflow`)
 
-## Why the explicit `-c` / `-o`?
+## Why the explicit `-c`?
 
-The parent hermes-agent repo's `pyproject.toml` enables `pytest-xdist` by
-default (`-n auto`). This suite is small enough that parallelism isn't
-worth the complexity, and pytest-xdist isn't always installed in the user's
-environment. The `-c tests/pytest.ini -o addopts="-p no:xdist"` flags make
-the suite run identically regardless of the parent project's config.
+The parent hermes-agent repo's `pyproject.toml` sets `addopts` flags
+(`-m 'not integration'`, pytest-timeout options) that assume the repo's own
+dev dependencies and markers. `-c tests/pytest.ini` pins this suite to its
+own config so it runs identically regardless of where the skill is
+installed or which plugins the surrounding environment has.
